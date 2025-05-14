@@ -24,6 +24,60 @@ db.connect(err => {
     }
 });
 
+// Get master timetable
+app.get("/api/master-timetable", (req, res) => {
+    const sql = "SELECT * FROM master_timetable ORDER BY course, day";
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error("❌ Error fetching master timetable:", err);
+            res.status(500).json({ error: "Database query failed" });
+        } else {
+            res.json(results);
+        }
+    });
+});
+
+// Update master timetable
+app.put("/api/master-timetable", (req, res) => {
+    const updatedTimetable = req.body;
+
+    updatedTimetable.forEach(row => {
+        const { id, ...columns } = row;
+        const columnNames = Object.keys(columns);
+        const columnValues = Object.values(columns);
+
+        let query = `UPDATE master_timetable SET ${columnNames.map(col => `${col} = ?`).join(", ")} WHERE id = ?`;
+        let values = [...columnValues, id];
+
+        db.query(query, values, (err) => {
+            if (err) {
+                console.error("❌ Error updating master timetable:", err);
+                res.status(500).json({ error: "Database update failed" });
+                return;
+            }
+        });
+    });
+
+    res.json({ message: "✅ Master timetable updated successfully!" });
+});
+
+// Get tomorrow's timetable
+app.get("/api/timetable/tomorrow", (req, res) => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDay = tomorrow.toLocaleDateString("en-US", { weekday: "long" });
+
+    const sql = "SELECT * FROM master_timetable WHERE day = ?";
+    db.query(sql, [tomorrowDay], (err, results) => {
+        if (err) {
+            console.error("❌ Error fetching tomorrow's timetable:", err);
+            res.status(500).json({ error: "Database query failed" });
+        } else {
+            res.json(results);
+        }
+    });
+});
+
 // Save timetable history when daily timetable is reset
 function saveTimetableHistory() {
     const date = new Date().toISOString().split('T')[0];
