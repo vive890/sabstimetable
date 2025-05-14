@@ -5,30 +5,69 @@ const mysql = require("mysql2");
 const app = express();
 const PORT = 5004;
 
-
 app.use(cors());
-app.use(express.json()); // Allows Express to handle JSON requests
+app.use(express.json());
 
-// MySQL Connection
-/*const db = mysql.createConnection({
-    host: "localhost",
-    user: "root",
-    password: "Yashwan@135790",
-    database: "CollegeTimetable"
-});*/
 const db = mysql.createConnection({
-    host: "hopper.proxy.rlwy.net",   // Public MySQL Host from Railway
-    port: 26036,                      // Correct Port from Railway
-    user: "root",                     // Your MySQL user (root)
-    password: "NFgBQAasPKmFSqJEiPOkKvdnOMVsMMGo",   // Copy from Railway MYSQLPASSWORD
-    database: "railway"     // Copy from Railway MYSQLDATABASE
+    host: "hopper.proxy.rlwy.net",
+    port: 26036,
+    user: "root",
+    password: "NFgBQAasPKmFSqJEiPOkKvdnOMVsMMGo",
+    database: "railway"
 });
+
 db.connect(err => {
     if (err) {
         console.error("❌ Database connection failed:", err);
     } else {
         console.log("✅ Connected to MySQL");
     }
+});
+
+// Save timetable history when daily timetable is reset
+function saveTimetableHistory() {
+    const date = new Date().toISOString().split('T')[0];
+    
+    // First, check if we already saved history for today
+    db.query("SELECT COUNT(*) as count FROM timetable_history WHERE date = ?", [date], (err, result) => {
+        if (err) {
+            console.error("❌ Error checking timetable history:", err);
+            return;
+        }
+
+        if (result[0].count > 0) {
+            console.log("✅ Timetable history already saved for today");
+            return;
+        }
+
+        // Copy data from daily_timetable to timetable_history
+        const insertSql = `
+            INSERT INTO timetable_history (date, course, day, 8_9_AM, 9_10_AM, 10_11_AM, 11_30_12_30_PM, 12_30_1_30_PM, 1_30_2_30_PM)
+            SELECT ? as date, course, day, 8_9_AM, 9_10_AM, 10_11_AM, 11_30_12_30_PM, 12_30_1_30_PM, 1_30_2_30_PM 
+            FROM daily_timetable
+        `;
+
+        db.query(insertSql, [date], (err) => {
+            if (err) {
+                console.error("❌ Error saving timetable history:", err);
+            } else {
+                console.log("✅ Timetable history saved successfully");
+            }
+        });
+    });
+}
+
+// Get timetable history
+app.get("/api/timetable/history", (req, res) => {
+    const sql = "SELECT * FROM timetable_history ORDER BY date DESC, course";
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error("❌ Error fetching timetable history:", err);
+            res.status(500).json({ error: "Database query failed" });
+        } else {
+            res.json(results);
+        }
+    });
 });
 
 app.post("/api/staff-login", (req, res) => {
@@ -48,7 +87,6 @@ app.post("/api/staff-login", (req, res) => {
         }
     });
 });
-
 
 app.post("/api/admin-login", (req, res) => {
     const { passcode } = req.body;
@@ -73,16 +111,12 @@ app.post("/api/admin-login", (req, res) => {
     });
 });
 
-
-
-// **Function to Clear Old Suggestions at Midnight**
 function clearOldSuggestions() {
     const now = new Date();
-    const currentDate = now.toISOString().split("T")[0]; // Format: YYYY-MM-DD
+    const currentDate = now.toISOString().split("T")[0];
 
     console.log(`🔄 Checking if suggestions need to be cleared for ${currentDate}...`);
 
-    // **Step 1: Get last cleared date**
     db.query("SELECT value FROM system_settings WHERE name = 'last_cleared_date'", (err, result) => {
         if (err) {
             console.error("❌ Error checking last cleared date:", err);
@@ -94,14 +128,12 @@ function clearOldSuggestions() {
         if (lastClearedDate !== currentDate) {
             console.log("🗑️ New day detected! Clearing old suggestions...");
 
-            // **Step 2: Delete old suggestions**
             db.query("DELETE FROM suggestions", (deleteErr) => {
                 if (deleteErr) {
                     console.error("❌ Error clearing old suggestions:", deleteErr);
                 } else {
                     console.log("✅ Old suggestions cleared!");
 
-                    // **Step 3: Update last cleared date**
                     db.query(
                         "INSERT INTO system_settings (name, value) VALUES ('last_cleared_date', ?) ON DUPLICATE KEY UPDATE value = ?",
                         [currentDate, currentDate]
@@ -114,13 +146,9 @@ function clearOldSuggestions() {
     });
 }
 
-// **Run the function once when the server starts**
 clearOldSuggestions();
-
-// **Schedule to clear suggestions every minute (checks for date change)**
 setInterval(clearOldSuggestions, 60000);
 
-// **API to Submit a Suggestion**
 app.post("/api/suggestions", (req, res) => {
     const { staff_name, message } = req.body;
 
@@ -139,7 +167,6 @@ app.post("/api/suggestions", (req, res) => {
     });
 });
 
-// **API to Fetch All Suggestions (For Admin)**
 app.get("/api/suggestions", (req, res) => {
     db.query("SELECT * FROM suggestions", (err, results) => {
         if (err) {
@@ -151,8 +178,6 @@ app.get("/api/suggestions", (req, res) => {
     });
 });
 
-
-// **Fetch timetable for the current day**
 app.get("/api/timetable/today", (req, res) => {
     const currentDay = new Date().toLocaleDateString("en-US", { weekday: "long" });
 
@@ -168,12 +193,10 @@ app.get("/api/timetable/today", (req, res) => {
     });
 });
 
-// ✅ Function to reset daily_timetable from master_timetable
 function resetDailyTimetable() {
     const today = new Date().toISOString().split("T")[0];
     console.log("🔄 Checking if daily timetable needs reset...");
 
-    // Step 0: Check if already reset today
     db.query("SELECT value FROM system_settings WHERE name = 'last_timetable_reset'", (err, result) => {
         if (err) {
             console.error("❌ Error checking last_timetable_reset:", err);
@@ -187,7 +210,6 @@ function resetDailyTimetable() {
             return;
         }
 
-        // Step 1: Clear daily_timetable
         db.query("DELETE FROM daily_timetable", (err) => {
             if (err) {
                 console.error("❌ Error clearing daily_timetable:", err);
@@ -195,7 +217,6 @@ function resetDailyTimetable() {
             }
             console.log("✅ daily_timetable cleared!");
 
-            // Step 1.5: Reset AUTO_INCREMENT
             db.query("ALTER TABLE daily_timetable AUTO_INCREMENT = 1", (err) => {
                 if (err) {
                     console.error("❌ Error resetting AUTO_INCREMENT:", err);
@@ -203,7 +224,6 @@ function resetDailyTimetable() {
                 }
                 console.log("🔄 AUTO_INCREMENT reset to 1");
 
-                // Step 2: Copy from master_timetable
                 const copySql = `
                     INSERT INTO daily_timetable (course, day, 8_9_AM, 9_10_AM, 10_11_AM, 11_30_12_30_PM, 12_30_1_30_PM, 1_30_2_30_PM)
                     SELECT course, day, 8_9_AM, 9_10_AM, 10_11_AM, 11_30_12_30_PM, 12_30_1_30_PM, 1_30_2_30_PM FROM master_timetable
@@ -215,7 +235,9 @@ function resetDailyTimetable() {
                     }
                     console.log("✅ Copied from master_timetable!");
 
-                    // Step 3: Update the reset date
+                    // Save timetable history after reset
+                    saveTimetableHistory();
+
                     db.query(`
                         INSERT INTO system_settings (name, value)
                         VALUES ('last_timetable_reset', ?)
@@ -233,17 +255,11 @@ function resetDailyTimetable() {
     });
 }
 
-
-// ✅ Run reset once on server start
 resetDailyTimetable();
-
-// ✅ Check every minute (only resets once per day)
 setInterval(resetDailyTimetable, 60000);
 
-
-// **Update Timetable Data**
 app.put("/api/timetable", (req, res) => {
-    console.log("📩 Received Data:", JSON.stringify(req.body, null, 2)); // Debug
+    console.log("📩 Received Data:", JSON.stringify(req.body, null, 2));
 
     const updatedTimetable = req.body;
 
@@ -267,12 +283,8 @@ app.put("/api/timetable", (req, res) => {
     res.json({ message: "✅ Timetable updated successfully!" });
 });
 
-
-
-
-// **Fetch timetable for a specific course**
 app.get("/api/timetable/course/:courseName", (req, res) => {
-    const courseName = req.params.courseName.replace(/-/g, " "); // Convert URL format to database format
+    const courseName = req.params.courseName.replace(/-/g, " ");
     const currentDay = new Date().toLocaleDateString("en-US", { weekday: "long" });
 
     const sql = "SELECT * FROM daily_timetable WHERE course = ? AND day = ?";
@@ -287,9 +299,6 @@ app.get("/api/timetable/course/:courseName", (req, res) => {
     });
 });
 
-
-
-// **Start the Server**
 app.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
 });
