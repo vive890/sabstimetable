@@ -45,6 +45,9 @@ app.put("/api/master-timetable", async (req, res) => {
       if (error) throw error;
     }
 
+    // After updating master, update daily timetable
+    await resetDailyTimetable();
+
     res.json({ message: "✅ Master timetable updated successfully!" });
   } catch (error) {
     console.error("❌ Error updating master timetable:", error);
@@ -70,6 +73,32 @@ app.get("/api/timetable/tomorrow", async (req, res) => {
   } catch (error) {
     console.error("❌ Error fetching tomorrow's timetable:", error);
     res.status(500).json({ error: "Database query failed" });
+  }
+});
+
+// Update tomorrow's timetable
+app.put("/api/timetable/tomorrow", async (req, res) => {
+  try {
+    const updatedTimetable = req.body;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDay = tomorrow.toLocaleDateString("en-US", { weekday: "long" });
+    
+    for (const row of updatedTimetable) {
+      const { id, ...updates } = row;
+      const { error } = await supabase
+        .from('master_timetable')
+        .update(updates)
+        .eq('id', id)
+        .eq('day', tomorrowDay);
+
+      if (error) throw error;
+    }
+
+    res.json({ message: "✅ Tomorrow's timetable updated successfully!" });
+  } catch (error) {
+    console.error("❌ Error updating tomorrow's timetable:", error);
+    res.status(500).json({ error: "Database update failed" });
   }
 });
 
@@ -138,48 +167,6 @@ app.get("/api/timetable/history", async (req, res) => {
   }
 });
 
-// Staff login
-app.post("/api/staff-login", async (req, res) => {
-  try {
-    const { passcode } = req.body;
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: `staff_${passcode}@example.com`,
-      password: passcode
-    });
-
-    if (error) {
-      res.json({ success: false });
-    } else {
-      res.json({ success: true });
-    }
-  } catch (error) {
-    console.error("❌ Database error:", error);
-    res.status(500).json({ error: "Authentication failed" });
-  }
-});
-
-// Admin login
-app.post("/api/admin-login", async (req, res) => {
-  try {
-    const { passcode } = req.body;
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: `admin_${passcode}@example.com`,
-      password: passcode
-    });
-
-    if (error) {
-      res.json({ success: false });
-    } else {
-      res.json({ success: true });
-    }
-  } catch (error) {
-    console.error("❌ Database error:", error);
-    res.status(500).json({ error: "Authentication failed" });
-  }
-});
-
 // Get today's timetable
 app.get("/api/timetable/today", async (req, res) => {
   try {
@@ -196,6 +183,31 @@ app.get("/api/timetable/today", async (req, res) => {
   } catch (error) {
     console.error("❌ Database error:", error);
     res.status(500).json({ error: "Database query failed" });
+  }
+});
+
+// Update today's timetable
+app.put("/api/timetable/today", async (req, res) => {
+  try {
+    const updatedTimetable = req.body;
+    
+    for (const row of updatedTimetable) {
+      const { id, ...updates } = row;
+      const { error } = await supabase
+        .from('daily_timetable')
+        .update(updates)
+        .eq('id', id);
+
+      if (error) throw error;
+    }
+
+    // Save changes to history
+    await saveTimetableHistory();
+
+    res.json({ message: "✅ Today's timetable updated successfully!" });
+  } catch (error) {
+    console.error("❌ Error updating today's timetable:", error);
+    res.status(500).json({ error: "Database update failed" });
   }
 });
 

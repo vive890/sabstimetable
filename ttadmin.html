@@ -255,26 +255,22 @@
                 return;
             }
 
-            const columns = Object.keys(data[0]);
+            const columns = Object.keys(data[0]).filter(col => col !== 'created_at');
             columns.forEach(col => {
-                if (col !== 'created_at') {
-                    const th = document.createElement("th");
-                    th.textContent = col.replace(/_/g, " ").toUpperCase();
-                    header.appendChild(th);
-                }
+                const th = document.createElement("th");
+                th.textContent = col.replace(/_/g, " ").toUpperCase();
+                header.appendChild(th);
             });
 
             data.forEach(row => {
                 const tr = document.createElement("tr");
                 tr.dataset.id = row.id;
                 columns.forEach(col => {
-                    if (col !== 'created_at') {
-                        const td = document.createElement("td");
-                        td.textContent = row[col] || "";
-                        td.setAttribute("contenteditable", "false");
-                        td.dataset.column = col;
-                        tr.appendChild(td);
-                    }
+                    const td = document.createElement("td");
+                    td.textContent = row[col] || "";
+                    td.setAttribute("contenteditable", "false");
+                    td.dataset.column = col;
+                    tr.appendChild(td);
                 });
                 body.appendChild(tr);
             });
@@ -304,7 +300,7 @@
                 updatedData.push(rowData);
             });
 
-            const endpoint = type === 'master' ? '/api/master-timetable' : '/api/timetable';
+            const endpoint = type === 'master' ? '/api/master-timetable' : `/api/timetable/${type}`;
             
             fetch(`https://sabstimetable.onrender.com${endpoint}`, {
                 method: "PUT",
