@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
-const mysql = require("mysql2");
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
 
 const app = express();
 const PORT = 5004;
@@ -8,236 +9,244 @@ const PORT = 5004;
 app.use(cors());
 app.use(express.json());
 
-const db = mysql.createConnection({
-    host: "hopper.proxy.rlwy.net",
-    port: 26036,
-    user: "root",
-    password: "NFgBQAasPKmFSqJEiPOkKvdnOMVsMMGo",
-    database: "railway"
-});
-
-db.connect(err => {
-    if (err) {
-        console.error("❌ Database connection failed:", err);
-    } else {
-        console.log("✅ Connected to MySQL");
-    }
-});
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 // Get master timetable
-app.get("/api/master-timetable", (req, res) => {
-    const sql = "SELECT * FROM master_timetable ORDER BY id";
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error("❌ Error fetching master timetable:", err);
-            res.status(500).json({ error: "Database query failed" });
-        } else {
-            res.json(results);
-        }
-    });
+app.get("/api/master-timetable", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('master_timetable')
+      .select('*')
+      .order('id');
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Error fetching master timetable:", error);
+    res.status(500).json({ error: "Database query failed" });
+  }
 });
 
 // Update master timetable
-app.put("/api/master-timetable", (req, res) => {
+app.put("/api/master-timetable", async (req, res) => {
+  try {
     const updatedTimetable = req.body;
+    
+    for (const row of updatedTimetable) {
+      const { id, ...updates } = row;
+      const { error } = await supabase
+        .from('master_timetable')
+        .update(updates)
+        .eq('id', id);
 
-    const promises = updatedTimetable.map(row => {
-        return new Promise((resolve, reject) => {
-            const { id, ...columns } = row;
-            const columnNames = Object.keys(columns);
-            const columnValues = Object.values(columns);
+      if (error) throw error;
+    }
 
-            let query = `UPDATE master_timetable SET ${columnNames.map(col => `${col} = ?`).join(", ")} WHERE id = ?`;
-            let values = [...columnValues, id];
-
-            db.query(query, values, (err) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve();
-                }
-            });
-        });
-    });
-
-    Promise.all(promises)
-        .then(() => {
-            res.json({ message: "✅ Master timetable updated successfully!" });
-        })
-        .catch(error => {
-            console.error("❌ Error updating master timetable:", error);
-            res.status(500).json({ error: "Database update failed" });
-        });
+    res.json({ message: "✅ Master timetable updated successfully!" });
+  } catch (error) {
+    console.error("❌ Error updating master timetable:", error);
+    res.status(500).json({ error: "Database update failed" });
+  }
 });
 
 // Get tomorrow's timetable
-app.get("/api/timetable/tomorrow", (req, res) => {
+app.get("/api/timetable/tomorrow", async (req, res) => {
+  try {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowDay = tomorrow.toLocaleDateString("en-US", { weekday: "long" });
 
-    const sql = "SELECT * FROM master_timetable WHERE day = ? ORDER BY id";
-    db.query(sql, [tomorrowDay], (err, results) => {
-        if (err) {
-            console.error("❌ Error fetching tomorrow's timetable:", err);
-            res.status(500).json({ error: "Database query failed" });
-        } else {
-            res.json(results);
-        }
-    });
+    const { data, error } = await supabase
+      .from('master_timetable')
+      .select('*')
+      .eq('day', tomorrowDay)
+      .order('id');
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Error fetching tomorrow's timetable:", error);
+    res.status(500).json({ error: "Database query failed" });
+  }
 });
 
 // Save timetable history
-function saveTimetableHistory() {
+async function saveTimetableHistory() {
+  try {
     const date = new Date().toISOString().split('T')[0];
     
-    db.query("SELECT COUNT(*) as count FROM timetable_history WHERE date = ?", [date], (err, result) => {
-        if (err) {
-            console.error("❌ Error checking timetable history:", err);
-            return;
-        }
+    // Check if history exists for today
+    const { data: existingHistory } = await supabase
+      .from('timetable_history')
+      .select('count')
+      .eq('date', date)
+      .single();
 
-        if (result[0].count > 0) {
-            console.log("✅ Timetable history already saved for today");
-            return;
-        }
+    if (existingHistory?.count > 0) {
+      console.log("✅ Timetable history already saved for today");
+      return;
+    }
 
-        const insertSql = `
-            INSERT INTO timetable_history (date, course, day, period1, period2, period3, period4, period5, period6)
-            SELECT ? as date, course, day, period1, period2, period3, period4, period5, period6 
-            FROM daily_timetable
-        `;
+    // Get current daily timetable
+    const { data: dailyTimetable, error: fetchError } = await supabase
+      .from('daily_timetable')
+      .select('*');
 
-        db.query(insertSql, [date], (err) => {
-            if (err) {
-                console.error("❌ Error saving timetable history:", err);
-            } else {
-                console.log("✅ Timetable history saved successfully");
-            }
-        });
-    });
+    if (fetchError) throw fetchError;
+
+    // Save to history
+    const { error: insertError } = await supabase
+      .from('timetable_history')
+      .insert(
+        dailyTimetable.map(row => ({
+          date,
+          course: row.course,
+          day: row.day,
+          period1: row.period1,
+          period2: row.period2,
+          period3: row.period3,
+          period4: row.period4,
+          period5: row.period5,
+          period6: row.period6
+        }))
+      );
+
+    if (insertError) throw insertError;
+    console.log("✅ Timetable history saved successfully");
+  } catch (error) {
+    console.error("❌ Error saving timetable history:", error);
+  }
 }
 
 // Get timetable history
-app.get("/api/timetable/history", (req, res) => {
-    const sql = "SELECT * FROM timetable_history ORDER BY date DESC, id";
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error("❌ Error fetching timetable history:", err);
-            res.status(500).json({ error: "Database query failed" });
-        } else {
-            res.json(results);
-        }
-    });
+app.get("/api/timetable/history", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('timetable_history')
+      .select('*')
+      .order('date', { ascending: false })
+      .order('id');
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Error fetching timetable history:", error);
+    res.status(500).json({ error: "Database query failed" });
+  }
 });
 
-app.post("/api/staff-login", (req, res) => {
+// Staff login
+app.post("/api/staff-login", async (req, res) => {
+  try {
     const { passcode } = req.body;
 
-    const sql = "SELECT * FROM staff WHERE passcode = ?";
-    db.query(sql, [passcode], (err, results) => {
-        if (err) {
-            console.error("❌ Database error:", err);
-            return res.status(500).json({ error: "Database query failed" });
-        }
-
-        if (results.length > 0) {
-            res.json({ success: true });
-        } else {
-            res.json({ success: false });
-        }
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: `staff_${passcode}@example.com`,
+      password: passcode
     });
-});
 
-app.post("/api/admin-login", (req, res) => {
-    const { passcode } = req.body;
-
-    if (!passcode) {
-        return res.status(400).json({ error: "Passcode is required" });
+    if (error) {
+      res.json({ success: false });
+    } else {
+      res.json({ success: true });
     }
+  } catch (error) {
+    console.error("❌ Database error:", error);
+    res.status(500).json({ error: "Authentication failed" });
+  }
+});
 
-    const sql = "SELECT * FROM admin WHERE passcode = ?";
-    db.query(sql, [passcode], (err, results) => {
-        if (err) {
-            console.error("❌ Database error:", err);
-            res.status(500).json({ error: "Database query failed" });
-            return;
-        }
+// Admin login
+app.post("/api/admin-login", async (req, res) => {
+  try {
+    const { passcode } = req.body;
 
-        if (results.length > 0) {
-            res.json({ success: true });
-        } else {
-            res.json({ success: false });
-        }
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: `admin_${passcode}@example.com`,
+      password: passcode
     });
+
+    if (error) {
+      res.json({ success: false });
+    } else {
+      res.json({ success: true });
+    }
+  } catch (error) {
+    console.error("❌ Database error:", error);
+    res.status(500).json({ error: "Authentication failed" });
+  }
 });
 
 // Get today's timetable
-app.get("/api/timetable/today", (req, res) => {
+app.get("/api/timetable/today", async (req, res) => {
+  try {
     const currentDay = new Date().toLocaleDateString("en-US", { weekday: "long" });
-    const sql = "SELECT * FROM daily_timetable WHERE day = ? ORDER BY id";
     
-    db.query(sql, [currentDay], (err, results) => {
-        if (err) {
-            console.error("❌ Database error:", err);
-            res.status(500).json({ error: "Database query failed" });
-        } else {
-            res.json(results);
-        }
-    });
+    const { data, error } = await supabase
+      .from('daily_timetable')
+      .select('*')
+      .eq('day', currentDay)
+      .order('id');
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Database error:", error);
+    res.status(500).json({ error: "Database query failed" });
+  }
 });
 
 // Reset daily timetable
-function resetDailyTimetable() {
+async function resetDailyTimetable() {
+  try {
     const today = new Date().toISOString().split("T")[0];
     
-    db.query("SELECT value FROM system_settings WHERE name = 'last_timetable_reset'", (err, result) => {
-        if (err) {
-            console.error("❌ Error checking last_timetable_reset:", err);
-            return;
-        }
+    // Check last reset
+    const { data: settings } = await supabase
+      .from('system_settings')
+      .select('value')
+      .eq('name', 'last_timetable_reset')
+      .single();
 
-        const lastReset = result.length > 0 ? result[0].value : null;
+    if (settings?.value === today) {
+      return;
+    }
 
-        if (lastReset === today) {
-            return;
-        }
+    // Save current timetable to history
+    await saveTimetableHistory();
 
-        // Save current timetable to history before resetting
-        saveTimetableHistory();
+    // Clear daily timetable
+    const { error: deleteError } = await supabase
+      .from('daily_timetable')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
 
-        // Clear and reset daily_timetable
-        db.query("DELETE FROM daily_timetable", (err) => {
-            if (err) {
-                console.error("❌ Error clearing daily_timetable:", err);
-                return;
-            }
+    if (deleteError) throw deleteError;
 
-            db.query("ALTER TABLE daily_timetable AUTO_INCREMENT = 1", (err) => {
-                if (err) {
-                    console.error("❌ Error resetting AUTO_INCREMENT:", err);
-                    return;
-                }
+    // Copy from master to daily
+    const { data: masterData, error: fetchError } = await supabase
+      .from('master_timetable')
+      .select('*');
 
-                const copySql = `
-                    INSERT INTO daily_timetable (course, day, period1, period2, period3, period4, period5, period6)
-                    SELECT course, day, period1, period2, period3, period4, period5, period6 FROM master_timetable
-                `;
-                
-                db.query(copySql, (err) => {
-                    if (err) {
-                        console.error("❌ Error copying from master_timetable:", err);
-                        return;
-                    }
+    if (fetchError) throw fetchError;
 
-                    db.query(
-                        "INSERT INTO system_settings (name, value) VALUES ('last_timetable_reset', ?) ON DUPLICATE KEY UPDATE value = ?",
-                        [today, today]
-                    );
-                });
-            });
-        });
-    });
+    const { error: insertError } = await supabase
+      .from('daily_timetable')
+      .insert(masterData.map(({ id, created_at, ...row }) => row));
+
+    if (insertError) throw insertError;
+
+    // Update last reset time
+    await supabase
+      .from('system_settings')
+      .upsert({ name: 'last_timetable_reset', value: today });
+
+  } catch (error) {
+    console.error("❌ Error resetting daily timetable:", error);
+  }
 }
 
 // Initialize reset timer
@@ -245,5 +254,5 @@ resetDailyTimetable();
 setInterval(resetDailyTimetable, 60000); // Check every minute
 
 app.listen(PORT, () => {
-    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+  console.log(`🚀 Server is running on http://localhost:${PORT}`);
 });
