@@ -109,6 +109,16 @@
         .edit-cell {
             background-color: #fff3cd;
         }
+        .success-message {
+            color: #28a745;
+            margin: 10px 0;
+            display: none;
+        }
+        .error-message {
+            color: #dc3545;
+            margin: 10px 0;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -120,6 +130,8 @@
 
     <div id="todayTab" class="tab-content active">
         <h2>Today's Timetable</h2>
+        <div id="todayMessage" class="success-message"></div>
+        <div id="todayError" class="error-message"></div>
         <table id="todayTable">
             <thead>
                 <tr id="todayHeader"></tr>
@@ -133,6 +145,8 @@
 
     <div id="tomorrowTab" class="tab-content">
         <h2>Tomorrow's Timetable</h2>
+        <div id="tomorrowMessage" class="success-message"></div>
+        <div id="tomorrowError" class="error-message"></div>
         <table id="tomorrowTable">
             <thead>
                 <tr id="tomorrowHeader"></tr>
@@ -145,6 +159,8 @@
 
     <div id="masterTab" class="tab-content">
         <h2>Master Timetable</h2>
+        <div id="masterMessage" class="success-message"></div>
+        <div id="masterError" class="error-message"></div>
         <table id="masterTable">
             <thead>
                 <tr id="masterHeader"></tr>
@@ -168,17 +184,6 @@
             </table>
         </div>
     </div>
-
-    <h2>Admin - Staff Suggestions</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Staff Name</th>
-                <th>Suggestion</th>
-            </tr>
-        </thead>
-        <tbody id="suggestions-table"></tbody>
-    </table>
 
     <script>
         // Check login status
@@ -208,21 +213,33 @@
             fetch("https://sabstimetable.onrender.com/api/timetable/today")
                 .then(response => response.json())
                 .then(data => displayTimetable(data, 'today'))
-                .catch(error => console.error("❌ Error fetching today's timetable:", error));
+                .catch(error => {
+                    console.error("❌ Error fetching today's timetable:", error);
+                    document.getElementById("todayError").textContent = "Failed to load timetable";
+                    document.getElementById("todayError").style.display = "block";
+                });
         }
 
         function loadTomorrowTimetable() {
             fetch("https://sabstimetable.onrender.com/api/timetable/tomorrow")
                 .then(response => response.json())
                 .then(data => displayTimetable(data, 'tomorrow'))
-                .catch(error => console.error("❌ Error fetching tomorrow's timetable:", error));
+                .catch(error => {
+                    console.error("❌ Error fetching tomorrow's timetable:", error);
+                    document.getElementById("tomorrowError").textContent = "Failed to load timetable";
+                    document.getElementById("tomorrowError").style.display = "block";
+                });
         }
 
         function loadMasterTimetable() {
             fetch("https://sabstimetable.onrender.com/api/master-timetable")
                 .then(response => response.json())
                 .then(data => displayTimetable(data, 'master'))
-                .catch(error => console.error("❌ Error fetching master timetable:", error));
+                .catch(error => {
+                    console.error("❌ Error fetching master timetable:", error);
+                    document.getElementById("masterError").textContent = "Failed to load timetable";
+                    document.getElementById("masterError").style.display = "block";
+                });
         }
 
         // Display timetable
@@ -233,25 +250,31 @@
             header.innerHTML = "";
             body.innerHTML = "";
 
-            if (data.length === 0) {
+            if (!data || data.length === 0) {
                 body.innerHTML = `<tr><td colspan="8">No ${type} timetable data available</td></tr>`;
                 return;
             }
 
             const columns = Object.keys(data[0]);
             columns.forEach(col => {
-                const th = document.createElement("th");
-                th.textContent = col.replace(/_/g, " ");
-                header.appendChild(th);
+                if (col !== 'created_at') {
+                    const th = document.createElement("th");
+                    th.textContent = col.replace(/_/g, " ").toUpperCase();
+                    header.appendChild(th);
+                }
             });
 
             data.forEach(row => {
                 const tr = document.createElement("tr");
+                tr.dataset.id = row.id;
                 columns.forEach(col => {
-                    const td = document.createElement("td");
-                    td.textContent = row[col];
-                    td.setAttribute("contenteditable", "false");
-                    tr.appendChild(td);
+                    if (col !== 'created_at') {
+                        const td = document.createElement("td");
+                        td.textContent = row[col] || "";
+                        td.setAttribute("contenteditable", "false");
+                        td.dataset.column = col;
+                        tr.appendChild(td);
+                    }
                 });
                 body.appendChild(tr);
             });
@@ -260,8 +283,10 @@
         // Edit and Save functionality
         function enableEditing(type) {
             document.querySelectorAll(`#${type}Body td`).forEach(td => {
-                td.setAttribute("contenteditable", "true");
-                td.classList.add("edit-cell");
+                if (td.dataset.column !== 'id') {
+                    td.setAttribute("contenteditable", "true");
+                    td.classList.add("edit-cell");
+                }
             });
             document.getElementById(`edit${type.charAt(0).toUpperCase() + type.slice(1)}Button`).disabled = true;
             document.getElementById(`save${type.charAt(0).toUpperCase() + type.slice(1)}Button`).disabled = false;
@@ -270,14 +295,12 @@
         function saveChanges(type) {
             const updatedData = [];
             document.querySelectorAll(`#${type}Body tr`).forEach(row => {
-                const rowData = {};
-                const cells = row.querySelectorAll("td");
-                const columns = document.querySelectorAll(`#${type}Header th`);
-
-                cells.forEach((cell, index) => {
-                    rowData[columns[index].textContent.replace(/ /g, "_")] = cell.textContent.trim();
+                const rowData = { id: row.dataset.id };
+                row.querySelectorAll('td').forEach(cell => {
+                    if (cell.dataset.column) {
+                        rowData[cell.dataset.column] = cell.textContent.trim();
+                    }
                 });
-
                 updatedData.push(rowData);
             });
 
@@ -290,15 +313,37 @@
             })
             .then(response => response.json())
             .then(result => {
-                alert(result.message);
+                document.getElementById(`${type}Message`).textContent = result.message;
+                document.getElementById(`${type}Message`).style.display = "block";
                 document.getElementById(`save${type.charAt(0).toUpperCase() + type.slice(1)}Button`).disabled = true;
                 document.getElementById(`edit${type.charAt(0).toUpperCase() + type.slice(1)}Button`).disabled = false;
+                
                 document.querySelectorAll(`#${type}Body td`).forEach(td => {
                     td.setAttribute("contenteditable", "false");
                     td.classList.remove("edit-cell");
                 });
+
+                setTimeout(() => {
+                    document.getElementById(`${type}Message`).style.display = "none";
+                }, 3000);
+
+                // Reload the appropriate timetable
+                if (type === 'master') {
+                    loadMasterTimetable();
+                } else if (type === 'tomorrow') {
+                    loadTomorrowTimetable();
+                } else {
+                    loadTodayTimetable();
+                }
             })
-            .catch(error => console.error(`Error updating ${type} timetable:`, error));
+            .catch(error => {
+                console.error(`Error updating ${type} timetable:`, error);
+                document.getElementById(`${type}Error`).textContent = "Failed to save changes";
+                document.getElementById(`${type}Error`).style.display = "block";
+                setTimeout(() => {
+                    document.getElementById(`${type}Error`).style.display = "none";
+                }, 3000);
+            });
         }
 
         // History modal handling
@@ -345,15 +390,15 @@
             historyHeader.innerHTML = "";
             historyBody.innerHTML = "";
 
-            if (data.length === 0) {
+            if (!data || data.length === 0) {
                 historyBody.innerHTML = "<tr><td colspan='9'>No history data available</td></tr>";
                 return;
             }
 
-            const columns = Object.keys(data[0]);
+            const columns = Object.keys(data[0]).filter(col => col !== 'created_at');
             columns.forEach(col => {
                 const th = document.createElement("th");
-                th.textContent = col.replace(/_/g, " ");
+                th.textContent = col.replace(/_/g, " ").toUpperCase();
                 historyHeader.appendChild(th);
             });
 
@@ -361,30 +406,11 @@
                 const tr = document.createElement("tr");
                 columns.forEach(col => {
                     const td = document.createElement("td");
-                    td.textContent = row[col];
+                    td.textContent = row[col] || "";
                     tr.appendChild(td);
                 });
                 historyBody.appendChild(tr);
             });
-        }
-
-        // Staff suggestions
-        function fetchSuggestions() {
-            fetch("https://sabstimetable.onrender.com/api/suggestions")
-                .then(response => response.json())
-                .then(data => {
-                    const table = document.getElementById("suggestions-table");
-                    table.innerHTML = "";
-                    data.forEach(suggestion => {
-                        table.innerHTML += `
-                            <tr>
-                                <td>${suggestion.staff_name}</td>
-                                <td>${suggestion.message}</td>
-                            </tr>
-                        `;
-                    });
-                })
-                .catch(error => console.error("❌ Error fetching suggestions:", error));
         }
 
         // Event listeners
@@ -397,8 +423,6 @@
 
         // Initial load
         loadTodayTimetable();
-        fetchSuggestions();
-        setInterval(fetchSuggestions, 10000);
     </script>
 </body>
 </html>
